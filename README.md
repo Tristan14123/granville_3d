@@ -1,5 +1,5 @@
 
-Granville – carte 3D est une carte interactive en ligne qui permet de visualiser le territoire de Granville en trois dimensions et d'y superposer les données publiques d'aménagement, de cadastre et d'environnement.
+Granville – carte 3D : https://tristan14123.github.io/granville_3d/  est une carte interactive en ligne qui permet de visualiser le territoire de Granville en trois dimensions et d'y superposer les données publiques d'aménagement, de cadastre et d'environnement.
 
 Ce qu'elle montre
 
