@@ -375,9 +375,28 @@ Object.keys(PLACES).forEach((k) => {
   $("#gv-fly").appendChild(b);
 });
 
-// Zoom d'ouverture sur Granville (relief World Terrain déjà actif)
-viewer.scene.globe.depthTestAgainstTerrain = true;
-fly("Commune entière");
+/* ---------- Zoom d'ouverture : ralentit en fin de course ---------- */
+// Distance caméra pour une échelle 1/8000 (écran à 96 dpi : 1 px = 0,2646 mm)
+function rangeForScale(scale) {
+  const mPerPx = scale * 0.000264583;
+  const fov = viewer.camera.frustum.fov;           // champ de vision de la caméra
+  const widthPx = viewer.scene.canvas.clientWidth;
+  return (mPerPx * widthPx) / (2 * Math.tan(fov / 2));
+}
+
+viewer.camera.flyToBoundingSphere(
+  new Cesium.BoundingSphere(Cesium.Cartesian3.fromDegrees(-1.6074, 48.8356, 20), 1),
+  {
+    duration: 10,                                      // secondes
+    easingFunction: Cesium.EasingFunction.QUARTIC_OUT, // rapide au début, très lent à l'arrivée
+    offset: new Cesium.HeadingPitchRange(
+      Cesium.Math.toRadians(340),                      // cap
+      Cesium.Math.toRadians(-45),                      // inclinaison de 45°
+      rangeForScale(6000)                              // échelle 1/6000
+    ),
+    complete: () => vectors.forEach((f) => f()),       // charge les vecteurs à l'arrivée
+  }
+);
 
 </script>
 </body>
