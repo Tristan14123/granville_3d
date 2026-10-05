@@ -15,7 +15,7 @@ html,body,#cesiumContainer{margin:0;width:100%;height:100%;overflow:hidden;backg
 <div id="cesiumContainer"></div>
 <script type="module">
 /* ========= À RENSEIGNER =========
-   Jeton gratuit : https://ion.cesium.com/tokens  (restreint à ce nom de domaine) */
+   Jeton gratuit : https://ion.cesium.com/tokens  (restreignez-le à votre nom de domaine) */
 const ION_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IlFXSk5XZ3RNYXBIZVlLM0wiLCJqdGkiOiJlMzc2ODAxNi0wZWRiLTRlNGItOTc3NS0yMWMwZDNkOTA4ZjgiLCJpZCI6NTE1NDgzLCJzdWIiOiJ0cmlzdGFuX3YiLCJpc3MiOiJodHRwczovL2FwaS5jZXNpdW0uY29tIiwiYXVkIjoiZ3JhbnZpbGxlIiwiaWF0IjoxNzkxMjA0NTE3fQ.toV5IsAgQ6Yg5g1QPn_dQh_sCqrAu_D0Sg84X1qwv0k";
 
 const Cesium = window.Cesium;
@@ -24,7 +24,10 @@ document.getElementById("cesiumContainer").addEventListener("contextmenu", e => 
 
 
 const viewer = new Cesium.Viewer("cesiumContainer", {
-  terrain: Cesium.Terrain.fromWorldTerrain(),
+  terrain: Cesium.Terrain.fromWorldTerrain({
+    requestVertexNormals: true, // éclairage et ombrage du relief plus fins
+    requestWaterMask: true,     // rendu de la mer et des plans d'eau
+  }),
 });
 
 const osmBuildingsTileset = await Cesium.createOsmBuildingsAsync();
@@ -43,13 +46,9 @@ osmBuildingsTileset.customShader = new Cesium.CustomShader({
     }`,
 });
 
-viewer.scene.camera.flyTo({
-  destination: Cesium.Cartesian3.fromDegrees(-1.605, 48.837, 10050),
-  orientation: {
-    heading: Cesium.Math.toRadians(20),
-    pitch: Cesium.Math.toRadians(-20),
-  },
-  duration: 0,
+// Vue de départ : la Manche vue de loin, avant le zoom vers Granville
+viewer.scene.camera.setView({
+  destination: Cesium.Cartesian3.fromDegrees(-1.6, 48.8, 1500000),
 });
 
 /* ======================================================================
@@ -75,8 +74,8 @@ const style = document.createElement("style");
 style.textContent = `
 #gv{position:absolute;top:8px;left:8px;width:310px;max-height:calc(100% - 50px);overflow:auto;z-index:10;
  background:rgba(230,233,232,.96);color:#17262e;border-radius:6px;padding:10px 12px;
- font:13px/1.4 "Segoe UI",system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.35)}
-#gv h1{font:600 19px Georgia,serif;margin:0 0 6px}
+ font:12px/1.4 "Arial",system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.35)}
+#gv h1{font:600 19px Arial,serif;margin:0 0 6px}
 #gv details{border-top:1px solid #c5cccc;padding:5px 0}
 #gv summary{cursor:pointer;font-weight:600}
 #gv label.row{display:flex;gap:7px;align-items:center;padding:2px 0}
@@ -156,6 +155,36 @@ function simpleToggle(box, label, on, fn) {
 simpleToggle("#g-3d", "Bâtiments OSM (Cesium)", true, (v) => (osmBuildingsTileset.show = v));
 simpleToggle("#g-3d", "Test de profondeur sur le relief", true, (v) => (viewer.scene.globe.depthTestAgainstTerrain = v));
 viewer.scene.globe.depthTestAgainstTerrain = true;
+
+/* ---------- Nuages ---------- */
+const clouds = viewer.scene.primitives.add(new Cesium.CloudCollection({ noiseDetail: 16 }));
+const cloudData = [];
+for (let i = 0; i < 14; i++) {
+  const lon = -1.65 + Math.random() * 0.12;   // autour de Granville
+  const lat = 48.80 + Math.random() * 0.08;
+  const alt = 1800 + Math.random() * 1000;     // m, au-dessus du centre-ville
+  const size = 500 + Math.random() * 700;
+  const cloud = clouds.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
+    scale: new Cesium.Cartesian2(size * 1.6, size * 0.6),
+    maximumSize: new Cesium.Cartesian3(size / 6, size / 12, size / 14),
+    slice: 0.3 + Math.random() * 0.4,
+    brightness: 1.0,
+  });
+  cloudData.push({ cloud, lon, lat, alt });
+}
+
+// Dérive lente vers l'est
+viewer.scene.preRender.addEventListener(() => {
+  const dt = 0.0000012; // degrés par image
+  cloudData.forEach((c) => {
+    c.lon += dt;
+    if (c.lon > -1.50) c.lon = -1.65; // boucle sur la zone
+    c.cloud.position = Cesium.Cartesian3.fromDegrees(c.lon, c.lat, c.alt);
+  });
+});
+
+simpleToggle("#g-3d", "Nuages", true, (v) => (clouds.show = v));
 
 /* ---------- Couches WMS ---------- */
 const wms = (url, layers) =>
@@ -345,6 +374,10 @@ Object.keys(PLACES).forEach((k) => {
   b.onclick = () => fly(k);
   $("#gv-fly").appendChild(b);
 });
+
+// Zoom d'ouverture sur Granville (relief World Terrain déjà actif)
+viewer.scene.globe.depthTestAgainstTerrain = true;
+fly("Commune entière");
 
 </script>
 </body>
