@@ -15,4 +15,4 @@ Présenter un secteur à des élus, des habitants ou des partenaires, avec un su
 Croiser rapidement plusieurs sources officielles sans logiciel SIG : un navigateur suffit.
 Consulter les parcelles et leur zonage en cliquant directement sur la carte.
 
-<img width="1518" height="401" alt="image" src="https://github.com/user-attachments/assets/4e4f5b3d-8bc4-44ba-ad87-b5b85739b337" />
+<img width="1018" height="401" alt="image" src="https://github.com/user-attachments/assets/4e4f5b3d-8bc4-44ba-ad87-b5b85739b337" />
