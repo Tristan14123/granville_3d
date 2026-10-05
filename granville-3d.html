@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Granville – carte 3D</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.123.1/Build/Cesium/Widgets/widgets.css">
+<script src="https://cdn.jsdelivr.net/npm/cesium@1.123.1/Build/Cesium/Cesium.js"></script>
+<style>
+html,body,#cesiumContainer{margin:0;width:100%;height:100%;overflow:hidden;background:#0e1a20}
+@media(max-width:600px){#gv{width:calc(100% - 16px)!important;max-height:45%!important}}
+</style>
+</head>
+<body>
+<div id="cesiumContainer"></div>
+<script type="module">
+/* ========= À RENSEIGNER =========
+   Jeton gratuit : https://ion.cesium.com/tokens  (restreignez-le à votre nom de domaine) */
+const ION_TOKEN = "Insérer le token Cesium ici";
+
+const Cesium = window.Cesium;
+Cesium.Ion.defaultAccessToken = ION_TOKEN;
+document.getElementById("cesiumContainer").addEventListener("contextmenu", e => e.preventDefault());
+
+
+const viewer = new Cesium.Viewer("cesiumContainer", {
+  terrain: Cesium.Terrain.fromWorldTerrain(),
+});
+
+const osmBuildingsTileset = await Cesium.createOsmBuildingsAsync();
+viewer.scene.primitives.add(osmBuildingsTileset);
+
+// Toits en ardoise : les faces tournées vers le ciel prennent la couleur ardoise,
+// les façades gardent leur couleur OSM. Ajuster vec3(r, g, b) pour changer la teinte.
+osmBuildingsTileset.customShader = new Cesium.CustomShader({
+  fragmentShaderText: `
+    void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
+      vec3 up = normalize(fsInput.attributes.positionWC);
+      vec3 n = normalize(czm_inverseViewRotation * fsInput.attributes.normalEC);
+      float roof = smoothstep(0.55, 0.8, dot(n, up));
+      vec3 slate = vec3(0.23, 0.27, 0.31); // ardoise ~ #3B454F
+      material.diffuse = mix(material.diffuse, slate, roof);
+    }`,
+});
+
+viewer.scene.camera.flyTo({
+  destination: Cesium.Cartesian3.fromDegrees(-1.605, 48.837, 10050),
+  orientation: {
+    heading: Cesium.Math.toRadians(20),
+    pitch: Cesium.Math.toRadians(-20),
+  },
+  duration: 0,
+});
+
+/* ======================================================================
+   Granville – couches IGN / GPU / INPN / BRGM / Géorisques (Sandcastle)
+   ====================================================================== */
+const GEO = "https://data.geopf.fr";
+const WMS_R = `${GEO}/wms-r/wms`;
+const WMS_V = `${GEO}/wms-v/ows`;
+const INPN = "https://inpn.mnhn.fr/webgeoservice/WMS/fxx_inpn";
+const BBOX = [-1.64, 48.8, -1.545, 48.865]; // ouest, sud, est, nord
+const ZONE = { U: "#d6453a", AUc: "#f08c2e", AU: "#f08c2e", A: "#e8d44d", N: "#4f9b5b" };
+const PLACES = {
+  "Centre-ville": [-1.5974, 48.8386, 1800, -25],
+  "Haute-Ville": [-1.6067, 48.8362, 900, -35],
+  "Port": [-1.603, 48.834, 900, -35],
+  "Pointe du Roc": [-1.6089, 48.8321, 900, -35],
+  "Plat Gousset": [-1.5995, 48.845, 1100, -30],
+  "Commune entière": [-1.595, 48.833, 9000, -90],
+};
+
+/* ---------- Interface (panneau flottant) ---------- */
+const style = document.createElement("style");
+style.textContent = `
+#gv{position:absolute;top:8px;left:8px;width:310px;max-height:calc(100% - 50px);overflow:auto;z-index:10;
+ background:rgba(230,233,232,.96);color:#17262e;border-radius:6px;padding:10px 12px;
+ font:13px/1.4 "Segoe UI",system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.35)}
+#gv h1{font:600 19px Georgia,serif;margin:0 0 6px}
+#gv details{border-top:1px solid #c5cccc;padding:5px 0}
+#gv summary{cursor:pointer;font-weight:600}
+#gv label.row{display:flex;gap:7px;align-items:center;padding:2px 0}
+#gv label.row input[type=range]{width:64px;margin-left:auto}
+#gv .fly{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0}
+#gv button,#gv select,#gv input[type=text]{font:inherit;border:1px solid #c5cccc;background:#fff;border-radius:4px;padding:3px 7px;max-width:100%}
+#gv button{cursor:pointer}
+#gv-caps{max-height:150px;overflow:auto;display:flex;flex-direction:column;gap:3px;margin-top:5px}
+#gv-caps button{text-align:left;font-size:12px}
+#gv-status{font-size:12px;color:#52636b;margin-top:6px;min-height:15px}`;
+document.head.appendChild(style);
+
+const panel = document.createElement("div");
+panel.id = "gv";
+panel.innerHTML = `
+<h1>Granville</h1>
+<details open><summary>Aller à</summary><div class="fly" id="gv-fly"></div>
+ <label class="row"><input type="checkbox" id="gv-tilt" checked> Vue inclinée</label></details>
+<details open><summary>Fond de carte</summary><select id="gv-base"></select></details>
+<details open><summary>Bâtiments et relief</summary><div id="g-3d"></div></details>
+<details open><summary>Cadastre et IGN (WMS)</summary><div id="g-ign"></div></details>
+<details open><summary>Vecteurs 3D (WFS Géoplateforme)</summary><div id="g-wfs"></div></details>
+<details><summary>Environnement (INPN)</summary><div id="g-inpn"></div></details>
+<details><summary>Explorer un service WMS</summary>
+ <select id="gv-svc">
+  <option value="${WMS_V}">Géoportail de l’Urbanisme / IGN vecteur</option>
+  <option value="${WMS_R}">IGN raster</option>
+  <option value="https://www.georisques.gouv.fr/services">Géorisques</option>
+  <option value="${INPN}">INPN</option>
+  <option value="http://geoservices.brgm.fr/risques">BRGM risques</option>
+ </select>
+ <input type="text" id="gv-url" placeholder="ou une autre URL WMS" style="width:100%;margin-top:5px">
+ <button id="gv-load" style="margin-top:5px">Lister les couches</button>
+ <div id="gv-caps"></div><div id="g-custom"></div></details>
+<div id="gv-status"></div>`;
+document.body.appendChild(panel);
+const $ = (s) => panel.querySelector(s);
+const status = (m) => ($("#gv-status").textContent = m);
+
+/* ---------- Fonds de carte ---------- */
+const wmts = (layer, fmt = "image/jpeg") =>
+  new Cesium.UrlTemplateImageryProvider({
+    url: `${GEO}/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=normal&FORMAT=${fmt}&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}`,
+    maximumLevel: 19,
+    credit: "© IGN",
+  });
+const BASES = {
+  "Cesium (par défaut)": null,
+  "Orthophotographie IGN": () => wmts("ORTHOIMAGERY.ORTHOPHOTOS"),
+  "Plan IGN": () => wmts("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2", "image/png"),
+  "Carte topographique (SCAN)": () => wmts("GEOGRAPHICALGRIDSYSTEMS.MAPS.SCAN25TOUR"),
+  "OpenStreetMap": () => new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" }),
+};
+const defaultBase = viewer.imageryLayers.get(0);
+let customBase;
+Object.keys(BASES).forEach((k) => $("#gv-base").add(new Option(k, k)));
+$("#gv-base").onchange = (e) => {
+  if (customBase) viewer.imageryLayers.remove(customBase, true);
+  customBase = null;
+  const make = BASES[e.target.value];
+  if (defaultBase) defaultBase.show = !make;
+  if (make) customBase = viewer.imageryLayers.addImageryProvider(make(), 0);
+};
+$("#gv-base").value = "Cesium (par défaut)";
+$("#gv-base").onchange({ target: $("#gv-base") });
+
+/* ---------- Bâtiments OSM, relief ---------- */
+function simpleToggle(box, label, on, fn) {
+  const row = document.createElement("label");
+  row.className = "row";
+  row.innerHTML = "<input type='checkbox'><span></span>";
+  row.children[1].textContent = label;
+  row.children[0].checked = on;
+  row.children[0].onchange = (e) => fn(e.target.checked);
+  $(box).appendChild(row);
+}
+simpleToggle("#g-3d", "Bâtiments OSM (Cesium)", true, (v) => (osmBuildingsTileset.show = v));
+simpleToggle("#g-3d", "Test de profondeur sur le relief", true, (v) => (viewer.scene.globe.depthTestAgainstTerrain = v));
+viewer.scene.globe.depthTestAgainstTerrain = true;
+
+/* ---------- Couches WMS ---------- */
+const wms = (url, layers) =>
+  new Cesium.WebMapServiceImageryProvider({
+    url,
+    layers,
+    rectangle: Cesium.Rectangle.fromDegrees(...BBOX),
+    maximumLevel: 19,
+    parameters: { transparent: true, format: "image/png" },
+  });
+const img = (p) => () => viewer.imageryLayers.addImageryProvider(p());
+
+function toggle(box, label, make, on, alpha = 1) {
+  const row = document.createElement("label");
+  row.className = "row";
+  row.innerHTML = `<input type="checkbox"><span></span><input type="range" min="0.1" max="1" step="0.05" value="${alpha}">`;
+  row.children[1].textContent = label;
+  const [cb, , rg] = row.children;
+  let layer;
+  cb.onchange = () => {
+    if (cb.checked) {
+      try { layer = make(); layer.alpha = +rg.value; status(label + " ajouté"); }
+      catch (e) { cb.checked = false; status("Échec : " + label); }
+    } else if (layer) { viewer.imageryLayers.remove(layer, true); layer = null; }
+  };
+  rg.oninput = () => { if (layer) layer.alpha = +rg.value; };
+  $(box).appendChild(row);
+  if (on) { cb.checked = true; cb.onchange(); }
+}
+toggle("#g-ign", "Parcelles cadastrales (Parcellaire Express)", img(() => wms(WMS_R, "CADASTRALPARCELS.PARCELLAIRE_EXPRESS")), true);
+toggle("#g-ign", "Parcellaire PCI vecteur", img(() => wms(WMS_V, "CADASTRALPARCELS.PCI_VECTEUR")));
+toggle("#g-ign", "Limites administratives", img(() => wms(WMS_R, "LIMITES_ADMINISTRATIVES_EXPRESS.LATEST")), true);
+toggle("#g-ign", "Cours d’eau BCAE", img(() => wms(WMS_R, "HYDROGRAPHY.BCAE.LATEST")));
+toggle("#g-ign", "Forêts publiques", img(() => wms(WMS_R, "FORETS.PUBLIQUES")));
+toggle("#g-ign", "Réseau routier", img(() => wmts("TRANSPORTNETWORKS.ROADS", "image/png")));
+toggle("#g-inpn", "ZNIEFF type I", img(() => wms(INPN, "Znieff1")), false, 0.7);
+toggle("#g-inpn", "ZNIEFF type II", img(() => wms(INPN, "Znieff2")), false, 0.7);
+
+/* ---------- WFS en vecteur ---------- */
+// Emprise de requête : ~2 km autour du centre de la vue (limite 5000 objets/requête)
+function viewBox() {
+  const c = viewer.scene.canvas;
+  const p = viewer.camera.pickEllipsoid(new Cesium.Cartesian2(c.clientWidth / 2, c.clientHeight / 2), viewer.scene.globe.ellipsoid);
+  let lon = -1.5974, lat = 48.8386;
+  if (p) { const g = Cesium.Cartographic.fromCartesian(p); lon = Cesium.Math.toDegrees(g.longitude); lat = Cesium.Math.toDegrees(g.latitude); }
+  return [lon - 0.015, lat - 0.01, lon + 0.015, lat + 0.01]; // ouest, sud, est, nord
+}
+const wfsUrl = (type, b, latLon, n = 4000) =>
+  `${GEO}/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=${encodeURIComponent(type)}` +
+  `&OUTPUTFORMAT=${encodeURIComponent("application/json")}&SRSNAME=EPSG:4326&COUNT=${n}` +
+  `&BBOX=${latLon ? [b[1], b[0], b[3], b[2]] : b},EPSG:4326`;
+const dropZ = (c) => (typeof c[0] === "number" ? c.slice(0, 2) : c.map(dropZ));
+
+// Essaie l'ordre lat/lon puis lon/lat ; renvoie un GeoJSON 2D ou lève une erreur lisible
+async function fetchWfs(type) {
+  const b = viewBox();
+  let last = "";
+  for (const latLon of [true, false]) {
+    const url = wfsUrl(type, b, latLon);
+    try {
+      const r = await fetch(url);
+      const t = await r.text();
+      if (!r.ok) { last = `HTTP ${r.status} ${t.slice(0, 120).replace(/\s+/g, " ")}`; continue; }
+      let j;
+      try { j = JSON.parse(t); } catch (e) { last = "Réponse non JSON : " + t.slice(0, 140).replace(/\s+/g, " "); continue; }
+      if (j.features && j.features.length) {
+        j.features.forEach((f) => { if (f.geometry) f.geometry.coordinates = dropZ(f.geometry.coordinates); });
+        console.log("WFS OK", type, j.features.length, url);
+        return j;
+      }
+      last = "0 objet dans l’emprise";
+    } catch (e) { last = "Réseau/CORS : " + e.message; }
+    console.warn("WFS échec", type, last, url);
+  }
+  throw new Error(last);
+}
+const pv = (e, k) => {
+  const v = e.properties && e.properties[k];
+  return v && v.getValue ? v.getValue() : v;
+};
+const col = (c, a) => Cesium.Color.fromCssColorString(c).withAlpha(a);
+const vectors = [];
+
+function vector(label, type, apply, on) {
+  const row = document.createElement("label");
+  row.className = "row";
+  row.innerHTML = "<input type='checkbox'><span></span>";
+  row.children[1].textContent = label;
+  const cb = row.children[0];
+  let ds;
+  const clear = () => { if (ds) { viewer.dataSources.remove(ds, true); ds = null; } };
+  const load = async () => {
+    clear();
+    status("Chargement : " + label + "…");
+    try {
+      const json = await fetchWfs(type);
+      ds = await Cesium.GeoJsonDataSource.load(json, {
+        clampToGround: true,
+        stroke: Cesium.Color.WHITE,
+        fill: Cesium.Color.TRANSPARENT,
+      });
+      ds.entities.values.forEach((e) => e.polygon && apply(e));
+      await viewer.dataSources.add(ds);
+      status(`${label} : ${ds.entities.values.length} objets`);
+    } catch (err) { status(`${label} : ${err.message}`); }
+  };
+  cb.onchange = () => (cb.checked ? load() : clear());
+  vectors.push(() => { if (cb.checked) load(); });
+  $("#g-wfs").appendChild(row);
+  if (on) { cb.checked = true; load(); }
+}
+const ground = (e, material) => {
+  e.polygon.material = material;
+  e.polygon.outline = true;
+  e.polygon.outlineColor = Cesium.Color.WHITE.withAlpha(0.8);
+};
+vector("Bâtiments BD TOPO (3D)", "BDTOPO_V3:batiment", (e) => {
+  const h = Number(pv(e, "hauteur")) || 6;
+  e.polygon.classificationType = undefined;
+  Object.assign(e.polygon, {
+    height: 0,
+    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+    extrudedHeight: h,
+    extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+    material: col(h > 15 ? "#d9d4c8" : "#efe9dd", 0.95),
+    outline: false,
+  });
+});
+vector("Zonage PLU (Géoportail de l’Urbanisme)", "wfs_du:zone_urba", (e) =>
+  ground(e, col(ZONE[String(pv(e, "typezone") || "N")] || "#999999", 0.45)));
+vector("Prescriptions surfaciques (PLU)", "wfs_du:prescription_surf", (e) =>
+  ground(e, col("#7a3fb0", 0.35)));
+vector("Parcelles cadastrales (cliquables)", "CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle", (e) =>
+  ground(e, col("#ffd54a", 0.12)));
+const rl = document.createElement("button");
+rl.textContent = "Recharger sur la vue actuelle";
+rl.style.marginTop = "5px";
+rl.onclick = () => vectors.forEach((f) => f());
+$("#g-wfs").appendChild(rl);
+
+/* ---------- Explorateur WMS ---------- */
+$("#gv-load").onclick = async () => {
+  const base = ($("#gv-url").value.trim() || $("#gv-svc").value).split("?")[0];
+  const box = $("#gv-caps");
+  box.textContent = "Chargement…";
+  try {
+    const r = await fetch(`${base}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities`);
+    const xml = new DOMParser().parseFromString(await r.text(), "text/xml");
+    const layers = [...xml.getElementsByTagName("Layer")]
+      .map((l) => {
+        const n = [...l.children].find((c) => c.localName === "Name");
+        const t = [...l.children].find((c) => c.localName === "Title");
+        return n && { name: n.textContent, title: t ? t.textContent : n.textContent };
+      })
+      .filter(Boolean);
+    box.innerHTML = layers.length ? "" : "Aucune couche trouvée (service ou CORS ?)";
+    layers.slice(0, 300).forEach((l) => {
+      const b = document.createElement("button");
+      b.textContent = l.title;
+      b.title = l.name;
+      b.onclick = () => toggle("#g-custom", l.title, img(() => wms(base, l.name)), true, 0.8);
+      box.appendChild(b);
+    });
+  } catch (e) { box.textContent = "Impossible de lire le service (réseau ou CORS)."; }
+};
+
+/* ---------- Navigation ---------- */
+function fly(k) {
+  const [lon, lat, range, pitch] = PLACES[k];
+  const tilt = $("#gv-tilt").checked ? pitch : -90;
+  viewer.camera.flyToBoundingSphere(
+    new Cesium.BoundingSphere(Cesium.Cartesian3.fromDegrees(lon, lat, 20), 1),
+    {
+      duration: 2.2,
+      complete: () => vectors.forEach((f) => f()),
+      offset: new Cesium.HeadingPitchRange(
+        Cesium.Math.toRadians(k === "Commune entière" ? 0 : 340),
+        Cesium.Math.toRadians(tilt),
+        range
+      ),
+    }
+  );
+}
+Object.keys(PLACES).forEach((k) => {
+  const b = document.createElement("button");
+  b.textContent = k;
+  b.onclick = () => fly(k);
+  $("#gv-fly").appendChild(b);
+});
+
+</script>
+</body>
+</html>
